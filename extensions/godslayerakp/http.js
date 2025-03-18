@@ -662,7 +662,99 @@
       const name = Cast.toString(args.name);
       this.request.body.delete(name);
     }
+    /*修改*/
+    async sendRequest(args) {
+    const url = Cast.toString(args.url);
+    const options = this.request.options;
 
+    this.clearAll();
+    this.response.url = url;
+
+    try {
+        const res = await Scratch.fetch(url, options);
+        
+        // 基础响应头处理
+        this.response.status = res.status;
+        this.response.headers = res.headers;
+        this.response.statusText = res.statusText;
+
+        // 请求状态处理
+        const isSuccess = res.ok;
+        this.request.success = isSuccess;
+        this.request.events.activate(isSuccess ? "reqSuccess" : "reqFail");
+        this.request.end = true;
+
+        // 流式处理优化
+        if (res.body) { // 检查是否支持流式读取
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                // 流终止条件
+                if (done) {
+                    if (buffer.length > 0) {
+                        this.handleStreamChunk(buffer);
+                    }
+                    this.request.events.activate("streamComplete");
+                    break;
+                }
+
+                // 分块处理逻辑
+                buffer += decoder.decode(value, { stream: true });
+                
+                // 按行处理或特定分隔符处理
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // 保留未完成的行
+                
+                for (const line of lines) {
+                    this.handleStreamChunk(line);
+                }
+            }
+        } else {
+            // 回退到全量处理
+            const contentType = res.headers.get("Content-Type") || '';
+            if (contentType.includes("multipart/form-data")) {
+                const form = await res.formData();
+                this.response.text = JSON.stringify(Object.fromEntries(form));
+            } else {
+                this.response.text = await res.text();
+            }
+        }
+    } catch (err) {
+        console.error("Request failed:", err);
+        this.response.error = err.toString();
+        this.request.fail = true;
+        this.request.end = true;
+        this.request.events.activate("reqFail");
+    }
+}
+
+// 新增分块处理方法
+handleStreamChunk(chunk) {
+    try {
+        // 实时处理数据块
+        this.response.streamBuffer = (this.response.streamBuffer || '') + chunk;
+        
+        // 触发实时数据事件（示例）
+        this.request.events.activate("streamChunk", {
+            chunk: chunk,
+            partial: this.response.streamBuffer
+        });
+
+        // 按需清空缓冲区（例如每处理10个chunk）
+        if ((this.chunkCounter || 0) % 10 === 0) {
+            this.response.streamBuffer = '';
+        }
+        this.chunkCounter = (this.chunkCounter || 0) + 1;
+    } catch (error) {
+        console.warn("Chunk processing error:", error);
+    }
+}
+
+/* original
     async sendRequest(args) {
       const url = Cast.toString(args.url);
       const options = this.request.options;
@@ -703,7 +795,7 @@
         this.request.events.activate("reqFail");
       }
     }
-
+*/
     /* extra stuff for when its missing something */
 
     showExtra() {
